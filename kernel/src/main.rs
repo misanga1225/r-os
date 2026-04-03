@@ -1,11 +1,59 @@
 #![no_std]
 #![no_main]
 
+use bootloader_api::info::{FrameBufferInfo, PixelFormat};
 use bootloader_api::{entry_point, BootInfo};
 use core::fmt::Write;
 use font8x8::UnicodeFonts;
 
 entry_point!(kernel_main);
+
+fn put_pixel(buf: &mut [u8], info: FrameBufferInfo, x: usize, y: usize, r: u8, g: u8, b: u8) {
+    if x >= info.width || y >= info.height {
+        return;
+    }
+    let bpp = info.bytes_per_pixel;
+    let offset = (y * info.stride + x) * bpp;
+    if offset + bpp > buf.len() {
+        return;
+    }
+    match info.pixel_format {
+        PixelFormat::Rgb => {
+            buf[offset] = r;
+            buf[offset + 1] = g;
+            buf[offset + 2] = b;
+            if bpp >= 4 {
+                buf[offset + 3] = 0xFF;
+            }
+        }
+        PixelFormat::Bgr => {
+            buf[offset] = b;
+            buf[offset + 1] = g;
+            buf[offset + 2] = r;
+            if bpp >= 4 {
+                buf[offset + 3] = 0xFF;
+            }
+        }
+        PixelFormat::U8 => {
+            buf[offset] = ((r as u16 + g as u16 + b as u16) / 3) as u8;
+        }
+        PixelFormat::Unknown {
+            red_position,
+            green_position,
+            blue_position,
+        } => {
+            let mut pixel: u32 = 0;
+            pixel |= (r as u32) << red_position;
+            pixel |= (g as u32) << green_position;
+            pixel |= (b as u32) << blue_position;
+            let bytes = pixel.to_le_bytes();
+            for i in 0..bpp.min(4) {
+                buf[offset + i] = bytes[i];
+            }
+        }
+        _ => return,
+    }
+}
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let mut serial = unsafe { uart_16550::SerialPort::new(0x3F8) };
@@ -49,8 +97,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Framebuffer output
     if let Some(fb) = boot_info.framebuffer.as_mut() {
         let info = fb.info();
-        let stride = info.stride;
-        let bpp = info.bytes_per_pixel;
         let buf = fb.buffer_mut();
 
         // Clear screen to black
@@ -65,12 +111,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                             if byte & (1 << col) != 0 {
                                 let x = i * 8 + col;
                                 let y = line_idx * 8 + row;
-                                let offset = (y * stride + x) * bpp;
-                                if offset + 3 <= buf.len() {
-                                    buf[offset] = 0xFF;
-                                    buf[offset + 1] = 0xFF;
-                                    buf[offset + 2] = 0xFF;
-                                }
+                                put_pixel(buf, info, x, y, 0xFF, 0xFF, 0xFF);
                             }
                         }
                     }
