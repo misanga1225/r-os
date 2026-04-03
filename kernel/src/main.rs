@@ -1,13 +1,25 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
+mod allocator;
 mod framebuffer;
+mod memory;
 mod serial;
 
+use alloc::{boxed::Box, vec::Vec};
 use bootloader_api::{BootInfo, entry_point};
 use font8x8::UnicodeFonts;
+use x86_64::VirtAddr;
 
-entry_point!(kernel_main);
+const CONFIG: bootloader_api::BootloaderConfig = {
+    let mut config = bootloader_api::BootloaderConfig::new_default();
+    config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
+    config
+};
+
+entry_point!(kernel_main, config = &CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial::init();
@@ -77,6 +89,32 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             info.width, info.height, info.pixel_format
         );
     }
+
+    // Initialize page table, frame allocator, and heap
+    let phys_offset = VirtAddr::new(
+        boot_info
+            .physical_memory_offset
+            .into_option()
+            .expect("physical_memory_offset not available"),
+    );
+    let mut mapper = unsafe { memory::init_page_table(phys_offset) };
+    let mut frame_allocator = memory::BootFrameAllocator::new(&boot_info.memory_regions);
+    allocator::init(&mut mapper, &mut frame_allocator);
+
+    // Heap allocation test
+    println!("\n=== Heap Allocator Test ===");
+
+    let boxed = Box::new(42);
+    println!("Box::new(42) = {}, at {:p}", boxed, boxed);
+
+    let mut vec = Vec::new();
+    for i in 0..10 {
+        vec.push(i);
+    }
+    println!("Vec: {:?}", vec);
+
+    let msg = alloc::string::String::from("hello from the heap!");
+    println!("String: {}", msg);
 
     println!("Halting CPU. Close QEMU window to exit.");
     loop {
