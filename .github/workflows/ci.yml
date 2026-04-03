@@ -25,10 +25,13 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Build
+      - name: Build (host)
+        run: cargo build -p r-os
+
+      - name: Build (kernel, no_std)
         env:
           CARGO_PROFILE_DEV_PANIC: abort
-        run: cargo build --workspace -Z build-std=core,compiler_builtins -Z build-std-features=panic_immediate_abort
+        run: cargo build -p kernel --target x86_64-unknown-none -Z build-std=core,compiler_builtins -Z build-std-features=panic_immediate_abort
 
       - name: Test
         run: cargo test --workspace --exclude kernel
