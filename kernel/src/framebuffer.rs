@@ -3,15 +3,7 @@ use bootloader_api::info::{FrameBufferInfo, PixelFormat};
 /// フレームバッファ上の (x, y) に RGB 色のピクセルを描画する。
 ///
 /// 範囲外の座標や未対応のピクセル形式は静かに無視される。
-pub fn put_pixel(
-    buf: &mut [u8],
-    info: FrameBufferInfo,
-    x: usize,
-    y: usize,
-    r: u8,
-    g: u8,
-    b: u8,
-) {
+pub fn put_pixel(buf: &mut [u8], info: FrameBufferInfo, x: usize, y: usize, r: u8, g: u8, b: u8) {
     if x >= info.width || y >= info.height {
         return;
     }

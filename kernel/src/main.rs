@@ -4,7 +4,7 @@
 mod framebuffer;
 mod serial;
 
-use bootloader_api::{entry_point, BootInfo};
+use bootloader_api::{BootInfo, entry_point};
 use font8x8::UnicodeFonts;
 
 entry_point!(kernel_main);
@@ -72,7 +72,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 }
             }
         }
-        println!("Framebuffer: {}x{}, {:?}", info.width, info.height, info.pixel_format);
+        println!(
+            "Framebuffer: {}x{}, {:?}",
+            info.width, info.height, info.pixel_format
+        );
     }
 
     println!("Halting CPU. Close QEMU window to exit.");
