@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt)]
 #![feature(custom_test_frameworks)]
 #![test_runner(test_runner)]
 #![reexport_test_harness_main = "test_main"]
@@ -8,6 +9,8 @@ extern crate alloc;
 
 mod allocator;
 mod framebuffer;
+mod gdt;
+mod interrupts;
 mod memory;
 mod serial;
 
@@ -26,6 +29,16 @@ entry_point!(kernel_main, config = &CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial::init();
+    gdt::init();
+    interrupts::init();
+
+    // ブレークポイント例外で IDT の動作を確認
+    x86_64::instructions::interrupts::int3();
+    println!("Returned from breakpoint -- interrupts working!");
+
+    interrupts::init_pics();
+    x86_64::instructions::interrupts::enable();
+    println!("Hardware interrupts enabled (timer + keyboard).");
 
     #[cfg(test)]
     test_main();
