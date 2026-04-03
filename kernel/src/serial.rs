@@ -14,9 +14,11 @@ pub fn init() {
 pub fn _print(args: core::fmt::Arguments) {
     use core::fmt::Write;
 
-    if let Some(serial) = SERIAL.lock().as_mut() {
-        serial.write_fmt(args).unwrap();
-    }
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if let Some(serial) = SERIAL.lock().as_mut() {
+            serial.write_fmt(args).unwrap();
+        }
+    });
 }
 
 #[macro_export]
