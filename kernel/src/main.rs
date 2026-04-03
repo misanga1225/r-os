@@ -43,9 +43,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             y: (info.height - height) / 2,
             width,
             height,
+            title_bar_height: framebuffer::DEFAULT_TITLE_BAR_HEIGHT,
         };
         let buf = fb.buffer_mut();
-        framebuffer::init(buf, info, window);
+        framebuffer::init(buf, info, window, "Shell");
     }
 
     gdt::init();
