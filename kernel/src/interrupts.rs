@@ -3,7 +3,7 @@ use x86_64::instructions::port::Port;
 use x86_64::registers::control::Cr2;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
-use crate::{gdt, print, println};
+use crate::{gdt, println};
 
 // ---------------------------------------------------------------------------
 // PIC (Programmable Interrupt Controller)
@@ -114,7 +114,6 @@ extern "x86-interrupt" fn page_fault_handler(
 // ---------------------------------------------------------------------------
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    print!(".");
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(HardwareInterrupt::Timer as u8);
@@ -123,7 +122,7 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
 
 extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
     let scancode: u8 = unsafe { Port::new(0x60).read() };
-    println!("KEYBOARD: scancode={scancode:#04x}");
+    crate::keyboard::add_scancode(scancode);
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(HardwareInterrupt::Keyboard as u8);

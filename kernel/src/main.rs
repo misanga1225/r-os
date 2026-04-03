@@ -11,16 +11,19 @@ mod allocator;
 mod framebuffer;
 mod gdt;
 mod interrupts;
+mod keyboard;
 mod memory;
 mod serial;
+mod shell;
 
-use alloc::{boxed::Box, vec::Vec};
 use bootloader_api::{BootInfo, entry_point};
-use font8x8::UnicodeFonts;
 use x86_64::VirtAddr;
 
+#[allow(deprecated)]
 const CONFIG: bootloader_api::BootloaderConfig = {
     let mut config = bootloader_api::BootloaderConfig::new_default();
+    config.frame_buffer.minimum_framebuffer_width = Some(1024);
+    config.frame_buffer.minimum_framebuffer_height = Some(768);
     config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
     config
 };
@@ -29,43 +32,38 @@ entry_point!(kernel_main, config = &CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial::init();
+
+    // フレームバッファコンソールを初期化（以降の println! が画面にも出力される）
+    if let Some(fb) = boot_info.framebuffer.as_mut() {
+        let info = fb.info();
+        let width = info.width.min(640);
+        let height = info.height.min(400);
+        let window = framebuffer::Window {
+            x: (info.width - width) / 2,
+            y: (info.height - height) / 2,
+            width,
+            height,
+        };
+        let buf = fb.buffer_mut();
+        framebuffer::init(buf, info, window);
+    }
+
     gdt::init();
     interrupts::init();
-
-    // ブレークポイント例外で IDT の動作を確認
-    x86_64::instructions::interrupts::int3();
-    println!("Returned from breakpoint -- interrupts working!");
-
     interrupts::init_pics();
     x86_64::instructions::interrupts::enable();
-    println!("Hardware interrupts enabled (timer + keyboard).");
 
     #[cfg(test)]
     test_main();
 
-    const HELLO_AA: &[&str] = &[
-        r" _          _ _        ",
-        r"| |__   ___| | | ___   ",
-        r"| '_ \ / _ \ | |/ _ \  ",
-        r"| | | |  __/ | | (_) | ",
-        r"|_| |_|\___|_|_|\___/  ",
-    ];
-
-    for line in HELLO_AA {
-        println!("{}", line);
-    }
-
     println!("\n=== Memory Map ===");
-    println!("{:<20} {:<20} {:<12} Kind", "Start", "End", "Size (KiB)");
-    println!("{:-<70}", "");
 
     let mut total_usable: u64 = 0;
     for region in boot_info.memory_regions.iter() {
         let size = region.end - region.start;
         println!(
-            "{:#018x}  {:#018x}  {:>10}  {:?}",
+            "{:#018x} {:>8} KiB {:?}",
             region.start,
-            region.end,
             size / 1024,
             region.kind,
         );
@@ -74,40 +72,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
-    println!("{:-<70}", "");
     println!(
-        "Total usable memory: {} KiB ({} MiB)",
+        "Total usable: {} KiB ({} MiB)",
         total_usable / 1024,
         total_usable / (1024 * 1024),
     );
-
-    // Framebuffer output
-    if let Some(fb) = boot_info.framebuffer.as_mut() {
-        let info = fb.info();
-        let buf = fb.buffer_mut();
-
-        buf.fill(0);
-
-        for (line_idx, line) in HELLO_AA.iter().enumerate() {
-            for (i, ch) in line.chars().enumerate() {
-                if let Some(glyph) = font8x8::BASIC_FONTS.get(ch) {
-                    for (row, &byte) in glyph.iter().enumerate() {
-                        for col in 0..8 {
-                            if byte & (1 << col) != 0 {
-                                let x = i * 8 + col;
-                                let y = line_idx * 8 + row;
-                                framebuffer::put_pixel(buf, info, x, y, 0xFF, 0xFF, 0xFF);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        println!(
-            "Framebuffer: {}x{}, {:?}",
-            info.width, info.height, info.pixel_format
-        );
-    }
 
     // Initialize page table, frame allocator, and heap
     let phys_offset = VirtAddr::new(
@@ -120,25 +89,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let mut frame_allocator = memory::BootFrameAllocator::new(&boot_info.memory_regions);
     allocator::init(&mut mapper, &mut frame_allocator);
 
-    // Heap allocation test
-    println!("\n=== Heap Allocator Test ===");
-
-    let boxed = Box::new(42);
-    println!("Box::new(42) = {}, at {:p}", boxed, boxed);
-
-    let mut vec = Vec::new();
-    for i in 0..10 {
-        vec.push(i);
-    }
-    println!("Vec: {:?}", vec);
-
-    let msg = alloc::string::String::from("hello from the heap!");
-    println!("String: {}", msg);
-
-    println!("Halting CPU. Close QEMU window to exit.");
-    loop {
-        x86_64::instructions::hlt();
-    }
+    shell::run();
 }
 
 #[derive(Debug, Clone, Copy)]
