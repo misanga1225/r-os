@@ -31,7 +31,8 @@ jobs:
       - name: Build (kernel, no_std)
         env:
           CARGO_PROFILE_DEV_PANIC: abort
-        run: cargo build -p kernel --target x86_64-unknown-none -Z build-std=core,compiler_builtins -Z unstable-options -Cpanic=abort
+          RUSTFLAGS: -C panic=abort
+        run: cargo build -p kernel --target x86_64-unknown-none -Z build-std=core,compiler_builtins -Z unstable-options
 
       - name: Test
         run: cargo test --workspace --exclude kernel
