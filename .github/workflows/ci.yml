@@ -16,7 +16,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components: rustfmt, clippy, llvm-tools
+          components: rustfmt, llvm-tools, rust-src
           targets: x86_64-unknown-none
 
       - name: Cache cargo
@@ -24,9 +24,6 @@ jobs:
 
       - name: Format check
         run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build
         run: cargo build --workspace

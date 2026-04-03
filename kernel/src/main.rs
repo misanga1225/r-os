@@ -47,11 +47,10 @@ fn put_pixel(buf: &mut [u8], info: FrameBufferInfo, x: usize, y: usize, r: u8, g
             pixel |= (g as u32) << green_position;
             pixel |= (b as u32) << blue_position;
             let bytes = pixel.to_le_bytes();
-            for i in 0..bpp.min(4) {
-                buf[offset + i] = bytes[i];
-            }
+            let len = bpp.min(4);
+            buf[offset..(offset + len)].copy_from_slice(&bytes[..len]);
         }
-        _ => return,
+        _ => (),
     }
 }
 
@@ -73,8 +72,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     writeln!(serial, "\n=== Memory Map ===").unwrap();
     writeln!(
         serial,
-        "{:<20} {:<20} {:<12} {}",
-        "Start", "End", "Size (KiB)", "Kind"
+        "{:<20} {:<20} {:<12} Kind",
+        "Start", "End", "Size (KiB)"
     )
     .unwrap();
     writeln!(serial, "{:-<70}", "").unwrap();
