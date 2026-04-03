@@ -1,8 +1,6 @@
 use linked_list_allocator::LockedHeap;
-use x86_64::structures::paging::{
-    FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB,
-};
 use x86_64::VirtAddr;
+use x86_64::structures::paging::{FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB};
 
 /// カーネルヒープの仮想アドレス開始位置。
 ///
@@ -40,6 +38,8 @@ pub fn init(
     }
 
     unsafe {
-        ALLOCATOR.lock().init(HEAP_START as *mut u8, HEAP_SIZE as usize);
+        ALLOCATOR
+            .lock()
+            .init(HEAP_START as *mut u8, HEAP_SIZE as usize);
     }
 }
