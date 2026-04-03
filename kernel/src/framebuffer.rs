@@ -104,9 +104,7 @@ fn fill_vertical_gradient(
         let r = lerp_u8(top.0, bottom.0, t);
         let g = lerp_u8(top.1, bottom.1, t);
         let b = lerp_u8(top.2, bottom.2, t);
-        fill_rect(
-            buf, info, rect.x, y, rect.width, 1, r, g, b,
-        );
+        fill_rect(buf, info, rect.x, y, rect.width, 1, r, g, b);
     }
 }
 
