@@ -8,8 +8,6 @@ fn main() {
         .arg(format!("format=raw,file={bios_path}"))
         .arg("-serial")
         .arg("mon:stdio")
-        .arg("-display")
-        .arg("none")
         .arg("-device")
         .arg("isa-debug-exit,iobase=0xf4,iosize=0x04");
 
