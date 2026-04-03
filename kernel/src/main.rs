@@ -1,5 +1,8 @@
 #![no_std]
 #![no_main]
+#![feature(custom_test_frameworks)]
+#![test_runner(test_runner)]
+#![reexport_test_harness_main = "test_main"]
 
 extern crate alloc;
 
@@ -23,6 +26,9 @@ entry_point!(kernel_main, config = &CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial::init();
+
+    #[cfg(test)]
+    test_main();
 
     const HELLO_AA: &[&str] = &[
         r" _          _ _        ",
@@ -140,6 +146,21 @@ pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
     loop {
         x86_64::instructions::hlt();
     }
+}
+
+pub fn test_runner(tests: &[&dyn Fn()]) {
+    println!("Running {} tests...", tests.len());
+    for test in tests {
+        test();
+    }
+    println!("All tests passed!");
+    exit_qemu(QemuExitCode::Success);
+}
+
+#[cfg(test)]
+#[test_case]
+fn trivial_assertion() {
+    assert_eq!(1, 1);
 }
 
 #[panic_handler]
