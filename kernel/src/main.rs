@@ -2,7 +2,7 @@
 #![no_main]
 
 use bootloader_api::info::{FrameBufferInfo, PixelFormat};
-use bootloader_api::{entry_point, BootInfo};
+use bootloader_api::{BootInfo, entry_point};
 use core::fmt::Write;
 use font8x8::UnicodeFonts;
 
@@ -71,7 +71,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
 
     writeln!(serial, "\n=== Memory Map ===").unwrap();
-    writeln!(serial, "{:<20} {:<20} {:<12} {}", "Start", "End", "Size (KiB)", "Kind").unwrap();
+    writeln!(
+        serial,
+        "{:<20} {:<20} {:<12} {}",
+        "Start", "End", "Size (KiB)", "Kind"
+    )
+    .unwrap();
     writeln!(serial, "{:-<70}", "").unwrap();
 
     let mut total_usable: u64 = 0;
@@ -92,7 +97,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
 
     writeln!(serial, "{:-<70}", "").unwrap();
-    writeln!(serial, "Total usable memory: {} KiB ({} MiB)", total_usable / 1024, total_usable / (1024 * 1024)).unwrap();
+    writeln!(
+        serial,
+        "Total usable memory: {} KiB ({} MiB)",
+        total_usable / 1024,
+        total_usable / (1024 * 1024)
+    )
+    .unwrap();
 
     // Framebuffer output
     if let Some(fb) = boot_info.framebuffer.as_mut() {
@@ -118,7 +129,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 }
             }
         }
-        writeln!(serial, "Framebuffer: {}x{}, {:?}", info.width, info.height, info.pixel_format).unwrap();
+        writeln!(
+            serial,
+            "Framebuffer: {}x{}, {:?}",
+            info.width, info.height, info.pixel_format
+        )
+        .unwrap();
     }
 
     writeln!(serial, "Halting CPU. Close QEMU window to exit.").unwrap();
