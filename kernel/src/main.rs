@@ -8,14 +8,18 @@
 extern crate alloc;
 
 mod allocator;
+mod counter;
 mod framebuffer;
 mod gdt;
 mod interrupts;
 mod keyboard;
+mod memmap;
 mod memory;
 mod mouse;
 mod serial;
 mod shell;
+mod task;
+mod wm;
 
 use bootloader_api::{BootInfo, entry_point};
 use x86_64::VirtAddr;
@@ -34,23 +38,12 @@ entry_point!(kernel_main, config = &CONFIG);
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial::init();
 
-    // フレームバッファコンソールを初期化（以降の println! が画面にも出力される）
+    // Initialize framebuffer (draws background, stores in FB_STATE)
     if let Some(fb) = boot_info.framebuffer.as_mut() {
         let info = fb.info();
-        // Shell: 右側パネル
-        let shell_window = framebuffer::Window {
-            x: 364,
-            y: 42,
-            width: 646,
-            height: 712,
-            title_bar_height: framebuffer::DEFAULT_TITLE_BAR_HEIGHT,
-        };
         let buf = fb.buffer_mut();
-        framebuffer::init(buf, info, shell_window, "Shell");
+        framebuffer::init(buf, info);
     }
-
-    // タスクバー描画
-    framebuffer::draw_taskbar();
 
     gdt::init();
     interrupts::init();
@@ -61,7 +54,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-    // Initialize page table, frame allocator, and heap
+    // Initialize page table, frame allocator, and heap (8 MiB)
     let phys_offset = VirtAddr::new(
         boot_info
             .physical_memory_offset
@@ -72,7 +65,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let mut frame_allocator = memory::BootFrameAllocator::new(&boot_info.memory_regions);
     allocator::init(&mut mapper, &mut frame_allocator);
 
-    // メモリ領域を収集してメモリマップパネルに表示
+    // ---------- Window Manager ----------
+    wm::init();
+
+    // Collect memory regions
     {
         use bootloader_api::info::MemoryRegionKind as BK;
         use framebuffer::{MemRegionInfo, MemRegionKind};
@@ -86,7 +82,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
         for region in boot_info.memory_regions.iter() {
             if count >= 30 {
-                break; // 合成エントリ用に2枠残す
+                break;
             }
             let kind = match region.kind {
                 BK::Usable => MemRegionKind::Usable,
@@ -103,7 +99,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             count += 1;
         }
 
-        // 合成エントリ: Heap
+        // Synthetic: Heap
         if count < 32 {
             regions[count] = MemRegionInfo {
                 start: allocator::HEAP_START,
@@ -113,23 +109,31 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             count += 1;
         }
 
-        framebuffer::set_memory_regions(&regions[..count]);
+        memmap::set_memory_regions(&regions[..count]);
     }
 
-    // Memory Map パネル描画（左側）
-    let memmap_window = framebuffer::Window {
-        x: 14,
-        y: 42,
-        width: 340,
-        height: 712,
-        title_bar_height: framebuffer::DEFAULT_TITLE_BAR_HEIGHT,
-    };
-    framebuffer::draw_memory_map_panel(memmap_window);
+    // Create windows (taskbar is at bottom, 28px)
+    // Screen: 1024x768, usable area: 1024x740 (y: 0..740)
+    let shell_win = wm::create_window(380, 80, 520, 420, "Shell", 1);
+    let memmap_win = wm::create_window(20, 40, 340, 520, "Memory Map", 2);
+    let counter_win = wm::create_window(560, 40, 240, 200, "Counter", 3);
 
-    framebuffer::init_cursor();
+    // Init consoles for text-based windows
+    wm::init_console(shell_win);
+    wm::init_console(counter_win);
 
-    println!("Welcome to r-os shell. Type 'help' for available commands.\n");
-    shell::run();
+    // Initial composite
+    wm::composite();
+
+    // ---------- Multitasking ----------
+    task::init();
+
+    task::spawn(shell::task_main, Some(shell_win));
+    task::spawn(memmap::task_main, Some(memmap_win));
+    task::spawn(counter::task_main, Some(counter_win));
+
+    // Start scheduler (never returns)
+    task::run();
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -153,11 +157,11 @@ pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
 }
 
 pub fn test_runner(tests: &[&dyn Fn()]) {
-    println!("Running {} tests...", tests.len());
+    serial::_print(format_args!("Running {} tests...\n", tests.len()));
     for test in tests {
         test();
     }
-    println!("All tests passed!");
+    serial::_print(format_args!("All tests passed!\n"));
     exit_qemu(QemuExitCode::Success);
 }
 
@@ -169,6 +173,6 @@ fn trivial_assertion() {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    println!("KERNEL PANIC: {info}");
+    serial::_print(format_args!("KERNEL PANIC: {info}\n"));
     exit_qemu(QemuExitCode::Failed);
 }

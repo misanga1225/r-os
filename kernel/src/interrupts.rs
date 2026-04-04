@@ -1,9 +1,16 @@
+use core::sync::atomic::{AtomicU64, Ordering};
 use pic8259::ChainedPics;
 use x86_64::instructions::port::Port;
 use x86_64::registers::control::Cr2;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
 use crate::{gdt, println};
+
+static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
+
+pub fn ticks() -> u64 {
+    TICK_COUNT.load(Ordering::Relaxed)
+}
 
 // ---------------------------------------------------------------------------
 // PIC (Programmable Interrupt Controller)
@@ -116,6 +123,7 @@ extern "x86-interrupt" fn page_fault_handler(
 // ---------------------------------------------------------------------------
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
+    TICK_COUNT.fetch_add(1, Ordering::Relaxed);
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(HardwareInterrupt::Timer as u8);
