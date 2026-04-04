@@ -8,8 +8,6 @@ const PROMPT: &str = "r-os> ";
 /// シェルのメインループ。kernel_main の初期化完了後に呼び出す。
 /// この関数は返らない。
 pub fn run() -> ! {
-    println!("\nWelcome to r-os shell. Type 'help' for available commands.\n");
-
     let mut line_buf = [0u8; MAX_LINE];
     let mut line_len: usize = 0;
 

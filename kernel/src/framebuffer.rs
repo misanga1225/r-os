@@ -9,6 +9,80 @@ pub const DEFAULT_TITLE_BAR_HEIGHT: usize = 24;
 const WINDOW_PADDING: usize = 6;
 
 // ---------------------------------------------------------------------------
+// Memory region types (for memory map panel)
+// ---------------------------------------------------------------------------
+
+const MAX_REGIONS: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MemRegionKind {
+    Usable,
+    Reserved,
+    AcpiReclaimable,
+    AcpiNvs,
+    BadMemory,
+    Bootloader,
+    Heap,
+    FrameBuffer,
+}
+
+impl MemRegionKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            MemRegionKind::Usable => "Usable",
+            MemRegionKind::Reserved => "Reserved",
+            MemRegionKind::AcpiReclaimable => "ACPI Reclaim",
+            MemRegionKind::AcpiNvs => "ACPI NVS",
+            MemRegionKind::BadMemory => "Bad Memory",
+            MemRegionKind::Bootloader => "Bootloader",
+            MemRegionKind::Heap => "Heap",
+            MemRegionKind::FrameBuffer => "FrameBuffer",
+        }
+    }
+
+    pub fn color(self) -> (u8, u8, u8) {
+        match self {
+            MemRegionKind::Usable => (0x50, 0xC8, 0x78),   // green
+            MemRegionKind::Reserved => (0xE0, 0x6C, 0x5C), // red-orange
+            MemRegionKind::AcpiReclaimable => (0xE0, 0xA0, 0x50), // orange
+            MemRegionKind::AcpiNvs => (0xD0, 0x80, 0x40),  // dark orange
+            MemRegionKind::BadMemory => (0xC0, 0x30, 0x30), // dark red
+            MemRegionKind::Bootloader => (0x5C, 0x9C, 0xE0), // blue
+            MemRegionKind::Heap => (0xE0, 0xD0, 0x50),     // yellow
+            MemRegionKind::FrameBuffer => (0xB0, 0x70, 0xD0), // purple
+        }
+    }
+}
+
+/// E820 BIOS メモリタイプからの変換
+pub fn bios_e820_to_kind(tag: u32) -> MemRegionKind {
+    match tag {
+        1 => MemRegionKind::Usable,
+        2 => MemRegionKind::Reserved,
+        3 => MemRegionKind::AcpiReclaimable,
+        4 => MemRegionKind::AcpiNvs,
+        5 => MemRegionKind::BadMemory,
+        _ => MemRegionKind::Reserved,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MemRegionInfo {
+    pub start: u64,
+    pub end: u64,
+    pub kind: MemRegionKind,
+}
+
+static MEM_REGIONS: Mutex<([MemRegionInfo; MAX_REGIONS], usize)> = Mutex::new((
+    [MemRegionInfo {
+        start: 0,
+        end: 0,
+        kind: MemRegionKind::Usable,
+    }; MAX_REGIONS],
+    0,
+));
+
+// ---------------------------------------------------------------------------
 // Geometry
 // ---------------------------------------------------------------------------
 
@@ -610,9 +684,13 @@ impl<'a> fmt::Write for ConsoleWriter<'a> {
 
 static FB_STATE: Mutex<Option<FrameBufferState>> = Mutex::new(None);
 
-pub fn init(buf: &'static mut [u8], info: FrameBufferInfo, window: Window, title: &str) {
-    draw_background(buf, info);
-
+fn draw_window(
+    buf: &mut [u8],
+    info: FrameBufferInfo,
+    window: Window,
+    title: &str,
+    title_bar_color: (u8, u8, u8),
+) {
     fill_rect(
         buf,
         info,
@@ -633,9 +711,9 @@ pub fn init(buf: &'static mut [u8], info: FrameBufferInfo, window: Window, title
         title_bar.y,
         title_bar.width,
         title_bar.height,
-        0x18,
-        0x2A,
-        0x40,
+        title_bar_color.0,
+        title_bar_color.1,
+        title_bar_color.2,
     );
 
     draw_rect_outline(
@@ -657,6 +735,11 @@ pub fn init(buf: &'static mut [u8], info: FrameBufferInfo, window: Window, title
         let text_y = window.y + (title_bar.height - FONT_HEIGHT) / 2;
         draw_text(buf, info, text_x, text_y, title, 0xF0, 0xF2, 0xF6);
     }
+}
+
+pub fn init(buf: &'static mut [u8], info: FrameBufferInfo, window: Window, title: &str) {
+    draw_background(buf, info);
+    draw_window(buf, info, window, title, (0x18, 0x2A, 0x40));
 
     let content = window.content_rect();
     let console = Console::new(buf, info, content);
@@ -667,6 +750,260 @@ pub fn init(buf: &'static mut [u8], info: FrameBufferInfo, window: Window, title
         console,
         cursor: None,
     });
+}
+
+// ---------------------------------------------------------------------------
+// Taskbar
+// ---------------------------------------------------------------------------
+
+pub fn draw_taskbar() {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if let Some(state) = FB_STATE.lock().as_mut() {
+            let buf = &mut *state.buf;
+            let info = state.info;
+
+            // Background
+            fill_rect(buf, info, 0, 0, info.width, 28, 0x1A, 0x1E, 0x28);
+            // Bottom border
+            fill_rect(buf, info, 0, 27, info.width, 1, 0x33, 0x38, 0x44);
+            // "r-os" label
+            draw_text(buf, info, 12, 6, "r-os", 0xE0, 0xE4, 0xEC);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Memory map panel
+// ---------------------------------------------------------------------------
+
+pub fn set_memory_regions(regions: &[MemRegionInfo]) {
+    let mut guard = MEM_REGIONS.lock();
+    let count = regions.len().min(MAX_REGIONS);
+    for i in 0..count {
+        guard.0[i] = regions[i];
+    }
+    guard.1 = count;
+}
+
+pub fn draw_memory_map_panel(window: Window) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if let Some(state) = FB_STATE.lock().as_mut() {
+            let buf = &mut *state.buf;
+            let info = state.info;
+
+            draw_window(buf, info, window, "Memory Map", (0x28, 0x1A, 0x38));
+
+            let content = window.content_rect();
+            let regions_guard = MEM_REGIONS.lock();
+            let count = regions_guard.1;
+            if count == 0 {
+                return;
+            }
+
+            // Copy regions out of the lock
+            let mut regions = [MemRegionInfo {
+                start: 0,
+                end: 0,
+                kind: MemRegionKind::Usable,
+            }; MAX_REGIONS];
+            regions[..count].copy_from_slice(&regions_guard.0[..count]);
+            drop(regions_guard);
+
+            // --- Layout ---
+            // Row per region: color bar (4px) + line1 (kind + size) + line2 (address range)
+            // Then legend at the bottom
+            let row_height = FONT_HEIGHT * 2 + 8; // 2 text lines + padding
+            let legend_kinds = [
+                MemRegionKind::Usable,
+                MemRegionKind::Reserved,
+                MemRegionKind::AcpiReclaimable,
+                MemRegionKind::AcpiNvs,
+                MemRegionKind::Bootloader,
+                MemRegionKind::Heap,
+                MemRegionKind::FrameBuffer,
+            ];
+            let legend_rows = (legend_kinds.len() + 1) / 2;
+            let legend_height = legend_rows * (FONT_HEIGHT + 4) + 8;
+            let total_header = FONT_HEIGHT + 6; // "Physical Memory" header
+
+            // Compute how many regions fit in the list area
+            let list_area = content.height.saturating_sub(legend_height + total_header);
+            let max_visible = list_area / row_height;
+
+            let mut cy = content.y;
+
+            // --- Header ---
+            draw_text(
+                buf,
+                info,
+                content.x,
+                cy,
+                "Physical Memory",
+                0xA0,
+                0xA8,
+                0xB4,
+            );
+            cy += FONT_HEIGHT + 6;
+
+            // Separator line
+            fill_rect(buf, info, content.x, cy, content.width, 1, 0x33, 0x38, 0x44);
+            cy += 4;
+
+            // --- Region list ---
+            let visible = count.min(max_visible);
+            for i in 0..visible {
+                let region = &regions[i];
+                let (cr, cg, cb) = region.kind.color();
+                let size = region.end - region.start;
+
+                // Color indicator bar (full width, 3px tall)
+                fill_rect(buf, info, content.x, cy, content.width, 3, cr, cg, cb);
+                cy += 4;
+
+                // Line 1: kind label + size
+                let kind_label = region.kind.label();
+                draw_text(buf, info, content.x + 2, cy, kind_label, cr, cg, cb);
+
+                // Size text (right-aligned area after kind label)
+                let mut size_buf = [0u8; 24];
+                let size_len = format_size(&mut size_buf, size);
+                let size_str = core::str::from_utf8(&size_buf[..size_len]).unwrap_or("");
+                let size_text_w = size_len * FONT_WIDTH;
+                let size_x = (content.x + content.width).saturating_sub(size_text_w + 2);
+                draw_text(buf, info, size_x, cy, size_str, 0xCC, 0xCC, 0xCC);
+                cy += FONT_HEIGHT;
+
+                // Line 2: address range "0xSTART - 0xEND"
+                let mut addr_buf = [0u8; 40];
+                let addr_len = format_addr_range(&mut addr_buf, region.start, region.end);
+                let addr_str = core::str::from_utf8(&addr_buf[..addr_len]).unwrap_or("");
+                draw_text(buf, info, content.x + 2, cy, addr_str, 0x88, 0x8C, 0x96);
+                cy += FONT_HEIGHT;
+
+                // Row separator
+                cy += 1;
+                fill_rect(buf, info, content.x, cy, content.width, 1, 0x1A, 0x1E, 0x28);
+                cy += 3;
+            }
+
+            // --- Legend ---
+            let legend_y = content.y + content.height - legend_height;
+            // Separator above legend
+            fill_rect(
+                buf,
+                info,
+                content.x,
+                legend_y,
+                content.width,
+                1,
+                0x33,
+                0x38,
+                0x44,
+            );
+
+            let cols = 2;
+            let col_width = content.width / cols;
+            for (i, &kind) in legend_kinds.iter().enumerate() {
+                let col = i % cols;
+                let row = i / cols;
+                let lx = content.x + col * col_width;
+                let ly = legend_y + 6 + row * (FONT_HEIGHT + 4);
+                let (cr, cg, cb) = kind.color();
+                fill_rect(buf, info, lx, ly + 2, 12, 12, cr, cg, cb);
+                draw_text(buf, info, lx + 16, ly, kind.label(), 0xAA, 0xAA, 0xAA);
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Formatting helpers for memory map
+// ---------------------------------------------------------------------------
+
+fn format_size(buf: &mut [u8; 24], size: u64) -> usize {
+    let (val, suffix) = if size >= 1024 * 1024 * 1024 {
+        (size / (1024 * 1024 * 1024), " GiB")
+    } else if size >= 1024 * 1024 {
+        (size / (1024 * 1024), " MiB")
+    } else if size >= 1024 {
+        (size / 1024, " KiB")
+    } else {
+        (size, " B")
+    };
+    let mut pos = 0;
+    pos = write_u64_decimal(buf, pos, val);
+    for &c in suffix.as_bytes() {
+        if pos < 24 {
+            buf[pos] = c;
+            pos += 1;
+        }
+    }
+    pos
+}
+
+fn format_addr_range(buf: &mut [u8; 40], start: u64, end: u64) -> usize {
+    let mut pos = 0;
+    pos = write_hex(buf, pos, start, 40);
+    // " - "
+    if pos + 3 <= 40 {
+        buf[pos] = b'-';
+        pos += 1;
+    }
+    pos = write_hex(buf, pos, end, 40);
+    pos
+}
+
+fn write_hex(buf: &mut [u8], mut pos: usize, val: u64, limit: usize) -> usize {
+    if pos + 2 > limit {
+        return pos;
+    }
+    buf[pos] = b'0';
+    pos += 1;
+    buf[pos] = b'x';
+    pos += 1;
+
+    // Find first non-zero nibble (min 4 hex digits)
+    let mut started = false;
+    for shift in (0..16).rev() {
+        let nibble = ((val >> (shift * 4)) & 0xF) as u8;
+        if nibble != 0 || started || shift < 4 {
+            if pos < limit {
+                buf[pos] = if nibble < 10 {
+                    b'0' + nibble
+                } else {
+                    b'a' + nibble - 10
+                };
+                pos += 1;
+                started = true;
+            }
+        }
+    }
+    pos
+}
+
+fn write_u64_decimal(buf: &mut [u8], mut pos: usize, val: u64) -> usize {
+    if val == 0 {
+        if pos < buf.len() {
+            buf[pos] = b'0';
+            pos += 1;
+        }
+        return pos;
+    }
+    let mut digits = [0u8; 20];
+    let mut n = val;
+    let mut dlen = 0;
+    while n > 0 {
+        digits[dlen] = (n % 10) as u8 + b'0';
+        n /= 10;
+        dlen += 1;
+    }
+    for d in (0..dlen).rev() {
+        if pos < buf.len() {
+            buf[pos] = digits[d];
+            pos += 1;
+        }
+    }
+    pos
 }
 
 pub fn init_cursor() {
