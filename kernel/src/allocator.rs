@@ -8,7 +8,7 @@ use x86_64::structures::paging::{FrameAllocator, Mapper, Page, PageTableFlags, S
 pub const HEAP_START: u64 = 0x4444_4444_0000;
 
 /// カーネルヒープのサイズ（100 KiB）。
-pub const HEAP_SIZE: u64 = 100 * 1024;
+pub const HEAP_SIZE: u64 = 8 * 1024 * 1024; // 8 MiB
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();

@@ -1,18 +1,15 @@
 use bootloader_api::info::{FrameBufferInfo, PixelFormat};
-use core::fmt;
 use font8x8::UnicodeFonts;
 use spin::Mutex;
 
-use crate::mouse::MouseEvent;
-
 pub const DEFAULT_TITLE_BAR_HEIGHT: usize = 24;
-const WINDOW_PADDING: usize = 6;
+pub const WINDOW_PADDING: usize = 6;
 
 // ---------------------------------------------------------------------------
 // Memory region types (for memory map panel)
 // ---------------------------------------------------------------------------
 
-const MAX_REGIONS: usize = 32;
+pub const MAX_REGIONS: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MemRegionKind {
@@ -42,19 +39,18 @@ impl MemRegionKind {
 
     pub fn color(self) -> (u8, u8, u8) {
         match self {
-            MemRegionKind::Usable => (0x50, 0xC8, 0x78),   // green
-            MemRegionKind::Reserved => (0xE0, 0x6C, 0x5C), // red-orange
-            MemRegionKind::AcpiReclaimable => (0xE0, 0xA0, 0x50), // orange
-            MemRegionKind::AcpiNvs => (0xD0, 0x80, 0x40),  // dark orange
-            MemRegionKind::BadMemory => (0xC0, 0x30, 0x30), // dark red
-            MemRegionKind::Bootloader => (0x5C, 0x9C, 0xE0), // blue
-            MemRegionKind::Heap => (0xE0, 0xD0, 0x50),     // yellow
-            MemRegionKind::FrameBuffer => (0xB0, 0x70, 0xD0), // purple
+            MemRegionKind::Usable => (0x50, 0xC8, 0x78),
+            MemRegionKind::Reserved => (0xE0, 0x6C, 0x5C),
+            MemRegionKind::AcpiReclaimable => (0xE0, 0xA0, 0x50),
+            MemRegionKind::AcpiNvs => (0xD0, 0x80, 0x40),
+            MemRegionKind::BadMemory => (0xC0, 0x30, 0x30),
+            MemRegionKind::Bootloader => (0x5C, 0x9C, 0xE0),
+            MemRegionKind::Heap => (0xE0, 0xD0, 0x50),
+            MemRegionKind::FrameBuffer => (0xB0, 0x70, 0xD0),
         }
     }
 }
 
-/// E820 BIOS メモリタイプからの変換
 pub fn bios_e820_to_kind(tag: u32) -> MemRegionKind {
     match tag {
         1 => MemRegionKind::Usable,
@@ -73,15 +69,6 @@ pub struct MemRegionInfo {
     pub kind: MemRegionKind,
 }
 
-static MEM_REGIONS: Mutex<([MemRegionInfo; MAX_REGIONS], usize)> = Mutex::new((
-    [MemRegionInfo {
-        start: 0,
-        end: 0,
-        kind: MemRegionKind::Usable,
-    }; MAX_REGIONS],
-    0,
-));
-
 // ---------------------------------------------------------------------------
 // Geometry
 // ---------------------------------------------------------------------------
@@ -94,45 +81,20 @@ pub struct Rect {
     pub height: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Window {
-    pub x: usize,
-    pub y: usize,
-    pub width: usize,
-    pub height: usize,
-    pub title_bar_height: usize,
-}
-
-impl Window {
-    fn title_bar_rect(self) -> Rect {
-        Rect {
-            x: self.x,
-            y: self.y,
-            width: self.width,
-            height: self.title_bar_height.min(self.height),
-        }
-    }
-
-    fn content_rect(self) -> Rect {
-        let title_h = self.title_bar_height.min(self.height);
-        let x = self.x + WINDOW_PADDING;
-        let y = self.y + title_h + WINDOW_PADDING;
-        let width = self.width.saturating_sub(WINDOW_PADDING * 2);
-        let height = self.height.saturating_sub(title_h + WINDOW_PADDING * 2);
-        Rect {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Pixel-level drawing (free functions operating on raw buffer)
+// Font constants
 // ---------------------------------------------------------------------------
 
-fn put_pixel(buf: &mut [u8], info: FrameBufferInfo, x: usize, y: usize, r: u8, g: u8, b: u8) {
+pub const FONT_SCALE_X: usize = 1;
+pub const FONT_SCALE_Y: usize = 2;
+pub const FONT_WIDTH: usize = 8 * FONT_SCALE_X;
+pub const FONT_HEIGHT: usize = 8 * FONT_SCALE_Y;
+
+// ---------------------------------------------------------------------------
+// Pixel-level drawing (public, operate on arbitrary buffers)
+// ---------------------------------------------------------------------------
+
+pub fn put_pixel(buf: &mut [u8], info: FrameBufferInfo, x: usize, y: usize, r: u8, g: u8, b: u8) {
     if x >= info.width || y >= info.height {
         return;
     }
@@ -181,7 +143,7 @@ fn put_pixel(buf: &mut [u8], info: FrameBufferInfo, x: usize, y: usize, r: u8, g
     }
 }
 
-fn read_pixel(buf: &[u8], info: FrameBufferInfo, x: usize, y: usize) -> (u8, u8, u8) {
+pub fn read_pixel(buf: &[u8], info: FrameBufferInfo, x: usize, y: usize) -> (u8, u8, u8) {
     if x >= info.width || y >= info.height {
         return (0, 0, 0);
     }
@@ -219,7 +181,7 @@ fn read_pixel(buf: &[u8], info: FrameBufferInfo, x: usize, y: usize) -> (u8, u8,
     }
 }
 
-fn fill_rect(
+pub fn fill_rect(
     buf: &mut [u8],
     info: FrameBufferInfo,
     x: usize,
@@ -239,7 +201,7 @@ fn fill_rect(
     }
 }
 
-fn draw_rect_outline(buf: &mut [u8], info: FrameBufferInfo, rect: Rect, r: u8, g: u8, b: u8) {
+pub fn draw_rect_outline(buf: &mut [u8], info: FrameBufferInfo, rect: Rect, r: u8, g: u8, b: u8) {
     if rect.width == 0 || rect.height == 0 {
         return;
     }
@@ -258,7 +220,7 @@ fn draw_rect_outline(buf: &mut [u8], info: FrameBufferInfo, rect: Rect, r: u8, g
     }
 }
 
-fn fill_vertical_gradient(
+pub fn fill_vertical_gradient(
     buf: &mut [u8],
     info: FrameBufferInfo,
     rect: Rect,
@@ -287,7 +249,7 @@ fn lerp_u8(a: u8, b: u8, t: u32) -> u8 {
     value.clamp(0, 255) as u8
 }
 
-fn draw_background(buf: &mut [u8], info: FrameBufferInfo) {
+pub fn draw_background(buf: &mut [u8], info: FrameBufferInfo) {
     let screen = Rect {
         x: 0,
         y: 0,
@@ -296,7 +258,6 @@ fn draw_background(buf: &mut [u8], info: FrameBufferInfo) {
     };
     fill_vertical_gradient(buf, info, screen, (0x1E, 0x22, 0x2B), (0x12, 0x14, 0x1A));
 
-    // Subtle dot pattern.
     let step = 4;
     for y in (0..info.height).step_by(step) {
         for x in (0..info.width).step_by(step) {
@@ -308,15 +269,10 @@ fn draw_background(buf: &mut [u8], info: FrameBufferInfo) {
 }
 
 // ---------------------------------------------------------------------------
-// Font / text drawing (free functions)
+// Font / text drawing
 // ---------------------------------------------------------------------------
 
-const FONT_SCALE_X: usize = 1;
-const FONT_SCALE_Y: usize = 2;
-const FONT_WIDTH: usize = 8 * FONT_SCALE_X;
-const FONT_HEIGHT: usize = 8 * FONT_SCALE_Y;
-
-fn draw_char_at(
+pub fn draw_char_at(
     buf: &mut [u8],
     info: FrameBufferInfo,
     x0: usize,
@@ -353,7 +309,7 @@ fn draw_char_at(
     }
 }
 
-fn draw_text(
+pub fn draw_text(
     buf: &mut [u8],
     info: FrameBufferInfo,
     x: usize,
@@ -371,23 +327,22 @@ fn draw_text(
 }
 
 // ---------------------------------------------------------------------------
-// Console (text state only — no longer owns the buffer)
+// Console (public, no buffer ownership — used by WM windows)
 // ---------------------------------------------------------------------------
 
-struct Console {
-    content: Rect,
-    col: usize,
-    row: usize,
-    cols: usize,
-    rows: usize,
-    cursor_visible: bool,
+pub struct Console {
+    pub content: Rect,
+    pub col: usize,
+    pub row: usize,
+    pub cols: usize,
+    pub rows: usize,
+    pub cursor_visible: bool,
 }
 
 impl Console {
-    fn new(buf: &mut [u8], info: FrameBufferInfo, content: Rect) -> Self {
+    pub fn new(buf: &mut [u8], info: FrameBufferInfo, content: Rect) -> Self {
         let cols = content.width / FONT_WIDTH;
         let rows = content.height / FONT_HEIGHT;
-        // Clear the content area
         fill_rect(
             buf,
             info,
@@ -409,7 +364,7 @@ impl Console {
         }
     }
 
-    fn clear(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
+    pub fn clear(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
         fill_rect(
             buf,
             info,
@@ -425,7 +380,7 @@ impl Console {
         self.row = 0;
     }
 
-    fn write_char(&mut self, buf: &mut [u8], info: FrameBufferInfo, c: char) {
+    pub fn write_char(&mut self, buf: &mut [u8], info: FrameBufferInfo, c: char) {
         if self.rows == 0 || self.cols == 0 {
             return;
         }
@@ -476,7 +431,7 @@ impl Console {
         }
     }
 
-    fn draw_cursor(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
+    pub fn draw_cursor(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
         if !self.cursor_visible {
             let x = self.content.x + self.col * FONT_WIDTH;
             let y0 = self.content.y + self.row * FONT_HEIGHT;
@@ -487,7 +442,7 @@ impl Console {
         }
     }
 
-    fn erase_cursor(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
+    pub fn erase_cursor(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
         if self.cursor_visible {
             let x = self.content.x + self.col * FONT_WIDTH;
             let y0 = self.content.y + self.row * FONT_HEIGHT;
@@ -498,7 +453,7 @@ impl Console {
         }
     }
 
-    fn scroll_up(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
+    pub fn scroll_up(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
         if self.rows == 0 {
             return;
         }
@@ -537,7 +492,7 @@ impl Console {
         self.row = self.rows - 1;
     }
 
-    fn write_str(&mut self, buf: &mut [u8], info: FrameBufferInfo, s: &str) {
+    pub fn write_str(&mut self, buf: &mut [u8], info: FrameBufferInfo, s: &str) {
         for c in s.chars() {
             self.write_char(buf, info, c);
         }
@@ -545,15 +500,14 @@ impl Console {
 }
 
 // ---------------------------------------------------------------------------
-// Mouse cursor
+// Mouse cursor sprite (public, used by WM)
 // ---------------------------------------------------------------------------
 
-const CURSOR_W: usize = 12;
-const CURSOR_H: usize = 16;
+pub const CURSOR_W: usize = 12;
+pub const CURSOR_H: usize = 16;
 
-// 0 = transparent, 1 = black (outline), 2 = white (fill)
 #[rustfmt::skip]
-const CURSOR_SPRITE: [[u8; CURSOR_W]; CURSOR_H] = [
+pub const CURSOR_SPRITE: [[u8; CURSOR_W]; CURSOR_H] = [
     [1,0,0,0,0,0,0,0,0,0,0,0],
     [1,1,0,0,0,0,0,0,0,0,0,0],
     [1,2,1,0,0,0,0,0,0,0,0,0],
@@ -572,355 +526,50 @@ const CURSOR_SPRITE: [[u8; CURSOR_W]; CURSOR_H] = [
     [0,0,0,0,0,1,1,1,0,0,0,0],
 ];
 
-struct CursorState {
-    x: i32,
-    y: i32,
-    screen_width: i32,
-    screen_height: i32,
-    visible: bool,
-    saved_bg: [[u8; 3]; CURSOR_W * CURSOR_H],
-}
-
-impl CursorState {
-    fn new(screen_width: usize, screen_height: usize) -> Self {
-        CursorState {
-            x: (screen_width / 2) as i32,
-            y: (screen_height / 2) as i32,
-            screen_width: screen_width as i32,
-            screen_height: screen_height as i32,
-            visible: false,
-            saved_bg: [[0; 3]; CURSOR_W * CURSOR_H],
-        }
-    }
-
-    fn save_background(&mut self, buf: &[u8], info: FrameBufferInfo) {
-        let cx = self.x as usize;
-        let cy = self.y as usize;
-        for sy in 0..CURSOR_H {
-            for sx in 0..CURSOR_W {
-                let (r, g, b) = read_pixel(buf, info, cx + sx, cy + sy);
-                self.saved_bg[sy * CURSOR_W + sx] = [r, g, b];
-            }
-        }
-    }
-
-    fn restore_background(&self, buf: &mut [u8], info: FrameBufferInfo) {
-        if !self.visible {
-            return;
-        }
-        let cx = self.x as usize;
-        let cy = self.y as usize;
-        for sy in 0..CURSOR_H {
-            for sx in 0..CURSOR_W {
-                if CURSOR_SPRITE[sy][sx] != 0 {
-                    let [r, g, b] = self.saved_bg[sy * CURSOR_W + sx];
-                    put_pixel(buf, info, cx + sx, cy + sy, r, g, b);
-                }
-            }
-        }
-    }
-
-    fn draw(&self, buf: &mut [u8], info: FrameBufferInfo) {
-        let cx = self.x as usize;
-        let cy = self.y as usize;
-        for sy in 0..CURSOR_H {
-            for sx in 0..CURSOR_W {
-                match CURSOR_SPRITE[sy][sx] {
-                    1 => put_pixel(buf, info, cx + sx, cy + sy, 0x00, 0x00, 0x00),
-                    2 => put_pixel(buf, info, cx + sx, cy + sy, 0xFF, 0xFF, 0xFF),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    fn update(&mut self, buf: &mut [u8], info: FrameBufferInfo, event: MouseEvent) {
-        // 旧位置の背景を復元
-        self.restore_background(buf, info);
-
-        // 座標更新（PS/2のY軸は上が正なので反転）
-        self.x += event.dx as i32;
-        self.y -= event.dy as i32;
-        self.x = self.x.clamp(0, self.screen_width - 1);
-        self.y = self.y.clamp(0, self.screen_height - 1);
-
-        // 新位置の背景を保存して描画
-        self.save_background(buf, info);
-        self.draw(buf, info);
-        self.visible = true;
-    }
-
-    fn show(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
-        self.save_background(buf, info);
-        self.draw(buf, info);
-        self.visible = true;
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Global framebuffer state
+// Global framebuffer state (simplified: only raw buffer + info)
 // ---------------------------------------------------------------------------
 
-struct FrameBufferState {
-    buf: &'static mut [u8],
-    info: FrameBufferInfo,
-    console: Console,
-    cursor: Option<CursorState>,
+pub(crate) struct FrameBufferState {
+    pub(crate) buf: &'static mut [u8],
+    pub(crate) info: FrameBufferInfo,
 }
 
-/// fmt::Write adapter that borrows from FrameBufferState.
-struct ConsoleWriter<'a> {
-    state: &'a mut FrameBufferState,
-}
+pub(crate) static FB_STATE: Mutex<Option<FrameBufferState>> = Mutex::new(None);
 
-impl<'a> fmt::Write for ConsoleWriter<'a> {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        let buf = &mut *self.state.buf;
-        let info = self.state.info;
-        self.state.console.write_str(buf, info, s);
-        Ok(())
-    }
-}
-
-static FB_STATE: Mutex<Option<FrameBufferState>> = Mutex::new(None);
-
-fn draw_window(
-    buf: &mut [u8],
-    info: FrameBufferInfo,
-    window: Window,
-    title: &str,
-    title_bar_color: (u8, u8, u8),
-) {
-    fill_rect(
-        buf,
-        info,
-        window.x,
-        window.y,
-        window.width,
-        window.height,
-        0,
-        0,
-        0,
-    );
-
-    let title_bar = window.title_bar_rect();
-    fill_rect(
-        buf,
-        info,
-        title_bar.x,
-        title_bar.y,
-        title_bar.width,
-        title_bar.height,
-        title_bar_color.0,
-        title_bar_color.1,
-        title_bar_color.2,
-    );
-
-    draw_rect_outline(
-        buf,
-        info,
-        Rect {
-            x: window.x,
-            y: window.y,
-            width: window.width,
-            height: window.height,
-        },
-        0x55,
-        0x5A,
-        0x66,
-    );
-
-    if title_bar.height >= FONT_HEIGHT {
-        let text_x = window.x + WINDOW_PADDING;
-        let text_y = window.y + (title_bar.height - FONT_HEIGHT) / 2;
-        draw_text(buf, info, text_x, text_y, title, 0xF0, 0xF2, 0xF6);
-    }
-}
-
-pub fn init(buf: &'static mut [u8], info: FrameBufferInfo, window: Window, title: &str) {
+/// Initialize global framebuffer state. Call once at boot.
+pub fn init(buf: &'static mut [u8], info: FrameBufferInfo) {
     draw_background(buf, info);
-    draw_window(buf, info, window, title, (0x18, 0x2A, 0x40));
-
-    let content = window.content_rect();
-    let console = Console::new(buf, info, content);
-
-    *FB_STATE.lock() = Some(FrameBufferState {
-        buf,
-        info,
-        console,
-        cursor: None,
-    });
+    *FB_STATE.lock() = Some(FrameBufferState { buf, info });
 }
 
-// ---------------------------------------------------------------------------
-// Taskbar
-// ---------------------------------------------------------------------------
-
-pub fn draw_taskbar() {
+/// Access the raw framebuffer. The closure receives (buf, info).
+/// Used by the window manager for compositing.
+pub fn with_fb<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut [u8], FrameBufferInfo) -> R,
+{
     x86_64::instructions::interrupts::without_interrupts(|| {
         if let Some(state) = FB_STATE.lock().as_mut() {
-            let buf = &mut *state.buf;
-            let info = state.info;
-
-            // Background
-            fill_rect(buf, info, 0, 0, info.width, 28, 0x1A, 0x1E, 0x28);
-            // Bottom border
-            fill_rect(buf, info, 0, 27, info.width, 1, 0x33, 0x38, 0x44);
-            // "r-os" label
-            draw_text(buf, info, 12, 6, "r-os", 0xE0, 0xE4, 0xEC);
+            Some(f(state.buf, state.info))
+        } else {
+            None
         }
-    });
+    })
 }
 
-// ---------------------------------------------------------------------------
-// Memory map panel
-// ---------------------------------------------------------------------------
-
-pub fn set_memory_regions(regions: &[MemRegionInfo]) {
-    let mut guard = MEM_REGIONS.lock();
-    let count = regions.len().min(MAX_REGIONS);
-    for i in 0..count {
-        guard.0[i] = regions[i];
-    }
-    guard.1 = count;
-}
-
-pub fn draw_memory_map_panel(window: Window) {
+/// Get framebuffer info (resolution, pixel format, etc.)
+pub fn info() -> Option<FrameBufferInfo> {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(state) = FB_STATE.lock().as_mut() {
-            let buf = &mut *state.buf;
-            let info = state.info;
-
-            draw_window(buf, info, window, "Memory Map", (0x28, 0x1A, 0x38));
-
-            let content = window.content_rect();
-            let regions_guard = MEM_REGIONS.lock();
-            let count = regions_guard.1;
-            if count == 0 {
-                return;
-            }
-
-            // Copy regions out of the lock
-            let mut regions = [MemRegionInfo {
-                start: 0,
-                end: 0,
-                kind: MemRegionKind::Usable,
-            }; MAX_REGIONS];
-            regions[..count].copy_from_slice(&regions_guard.0[..count]);
-            drop(regions_guard);
-
-            // --- Layout ---
-            // Row per region: color bar (4px) + line1 (kind + size) + line2 (address range)
-            // Then legend at the bottom
-            let row_height = FONT_HEIGHT * 2 + 8; // 2 text lines + padding
-            let legend_kinds = [
-                MemRegionKind::Usable,
-                MemRegionKind::Reserved,
-                MemRegionKind::AcpiReclaimable,
-                MemRegionKind::AcpiNvs,
-                MemRegionKind::Bootloader,
-                MemRegionKind::Heap,
-                MemRegionKind::FrameBuffer,
-            ];
-            let legend_rows = (legend_kinds.len() + 1) / 2;
-            let legend_height = legend_rows * (FONT_HEIGHT + 4) + 8;
-            let total_header = FONT_HEIGHT + 6; // "Physical Memory" header
-
-            // Compute how many regions fit in the list area
-            let list_area = content.height.saturating_sub(legend_height + total_header);
-            let max_visible = list_area / row_height;
-
-            let mut cy = content.y;
-
-            // --- Header ---
-            draw_text(
-                buf,
-                info,
-                content.x,
-                cy,
-                "Physical Memory",
-                0xA0,
-                0xA8,
-                0xB4,
-            );
-            cy += FONT_HEIGHT + 6;
-
-            // Separator line
-            fill_rect(buf, info, content.x, cy, content.width, 1, 0x33, 0x38, 0x44);
-            cy += 4;
-
-            // --- Region list ---
-            let visible = count.min(max_visible);
-            for i in 0..visible {
-                let region = &regions[i];
-                let (cr, cg, cb) = region.kind.color();
-                let size = region.end - region.start;
-
-                // Color indicator bar (full width, 3px tall)
-                fill_rect(buf, info, content.x, cy, content.width, 3, cr, cg, cb);
-                cy += 4;
-
-                // Line 1: kind label + size
-                let kind_label = region.kind.label();
-                draw_text(buf, info, content.x + 2, cy, kind_label, cr, cg, cb);
-
-                // Size text (right-aligned area after kind label)
-                let mut size_buf = [0u8; 24];
-                let size_len = format_size(&mut size_buf, size);
-                let size_str = core::str::from_utf8(&size_buf[..size_len]).unwrap_or("");
-                let size_text_w = size_len * FONT_WIDTH;
-                let size_x = (content.x + content.width).saturating_sub(size_text_w + 2);
-                draw_text(buf, info, size_x, cy, size_str, 0xCC, 0xCC, 0xCC);
-                cy += FONT_HEIGHT;
-
-                // Line 2: address range "0xSTART - 0xEND"
-                let mut addr_buf = [0u8; 40];
-                let addr_len = format_addr_range(&mut addr_buf, region.start, region.end);
-                let addr_str = core::str::from_utf8(&addr_buf[..addr_len]).unwrap_or("");
-                draw_text(buf, info, content.x + 2, cy, addr_str, 0x88, 0x8C, 0x96);
-                cy += FONT_HEIGHT;
-
-                // Row separator
-                cy += 1;
-                fill_rect(buf, info, content.x, cy, content.width, 1, 0x1A, 0x1E, 0x28);
-                cy += 3;
-            }
-
-            // --- Legend ---
-            let legend_y = content.y + content.height - legend_height;
-            // Separator above legend
-            fill_rect(
-                buf,
-                info,
-                content.x,
-                legend_y,
-                content.width,
-                1,
-                0x33,
-                0x38,
-                0x44,
-            );
-
-            let cols = 2;
-            let col_width = content.width / cols;
-            for (i, &kind) in legend_kinds.iter().enumerate() {
-                let col = i % cols;
-                let row = i / cols;
-                let lx = content.x + col * col_width;
-                let ly = legend_y + 6 + row * (FONT_HEIGHT + 4);
-                let (cr, cg, cb) = kind.color();
-                fill_rect(buf, info, lx, ly + 2, 12, 12, cr, cg, cb);
-                draw_text(buf, info, lx + 16, ly, kind.label(), 0xAA, 0xAA, 0xAA);
-            }
-        }
-    });
+        FB_STATE.lock().as_ref().map(|s| s.info)
+    })
 }
 
 // ---------------------------------------------------------------------------
-// Formatting helpers for memory map
+// Formatting helpers (public, for memory map)
 // ---------------------------------------------------------------------------
 
-fn format_size(buf: &mut [u8; 24], size: u64) -> usize {
+pub fn format_size(buf: &mut [u8; 24], size: u64) -> usize {
     let (val, suffix) = if size >= 1024 * 1024 * 1024 {
         (size / (1024 * 1024 * 1024), " GiB")
     } else if size >= 1024 * 1024 {
@@ -941,11 +590,10 @@ fn format_size(buf: &mut [u8; 24], size: u64) -> usize {
     pos
 }
 
-fn format_addr_range(buf: &mut [u8; 40], start: u64, end: u64) -> usize {
+pub fn format_addr_range(buf: &mut [u8; 40], start: u64, end: u64) -> usize {
     let mut pos = 0;
     pos = write_hex(buf, pos, start, 40);
-    // " - "
-    if pos + 3 <= 40 {
+    if pos + 1 <= 40 {
         buf[pos] = b'-';
         pos += 1;
     }
@@ -962,7 +610,6 @@ fn write_hex(buf: &mut [u8], mut pos: usize, val: u64, limit: usize) -> usize {
     buf[pos] = b'x';
     pos += 1;
 
-    // Find first non-zero nibble (min 4 hex digits)
     let mut started = false;
     for shift in (0..16).rev() {
         let nibble = ((val >> (shift * 4)) & 0xF) as u8;
@@ -1004,61 +651,4 @@ fn write_u64_decimal(buf: &mut [u8], mut pos: usize, val: u64) -> usize {
         }
     }
     pos
-}
-
-pub fn init_cursor() {
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(state) = FB_STATE.lock().as_mut() {
-            let w = state.info.width;
-            let h = state.info.height;
-            let mut cursor = CursorState::new(w, h);
-            cursor.show(state.buf, state.info);
-            state.cursor = Some(cursor);
-        }
-    });
-}
-
-pub fn update_cursor(event: MouseEvent) {
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(state) = FB_STATE.lock().as_mut() {
-            if let Some(cursor) = state.cursor.as_mut() {
-                cursor.update(state.buf, state.info, event);
-            }
-        }
-    });
-}
-
-#[doc(hidden)]
-pub fn _print(args: fmt::Arguments) {
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(state) = FB_STATE.lock().as_mut() {
-            use fmt::Write;
-            let mut writer = ConsoleWriter { state };
-            writer.write_fmt(args).unwrap();
-        }
-    });
-}
-
-pub fn show_cursor() {
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(state) = FB_STATE.lock().as_mut() {
-            state.console.draw_cursor(state.buf, state.info);
-        }
-    });
-}
-
-pub fn hide_cursor() {
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(state) = FB_STATE.lock().as_mut() {
-            state.console.erase_cursor(state.buf, state.info);
-        }
-    });
-}
-
-pub fn clear() {
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(state) = FB_STATE.lock().as_mut() {
-            state.console.clear(state.buf, state.info);
-        }
-    });
 }

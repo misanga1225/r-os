@@ -1,4 +1,4 @@
-# r-os
+# r-os（仮名）
 Rust製の自作OS（一応）．ブートローダは `bootloader` を使用し，HALに注力．
 
 ## 進捗管理

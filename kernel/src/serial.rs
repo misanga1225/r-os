@@ -9,7 +9,6 @@ pub fn init() {
     *SERIAL.lock() = Some(port);
 }
 
-/// シリアルポートに書き込む内部関数。
 #[doc(hidden)]
 pub fn _print(args: core::fmt::Arguments) {
     use core::fmt::Write;
@@ -21,22 +20,15 @@ pub fn _print(args: core::fmt::Arguments) {
     });
 }
 
-/// シリアル＋フレームバッファの両方に出力する内部関数。マクロから呼び出される。
-#[doc(hidden)]
-pub fn _print_all(args: core::fmt::Arguments) {
-    _print(args);
-    crate::framebuffer::_print(args);
-}
-
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {
-        $crate::serial::_print_all(format_args!($($arg)*))
+        $crate::serial::_print(format_args!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! println {
-    ()            => { $crate::serial::_print_all(format_args!("\n")) };
-    ($($arg:tt)*) => { $crate::serial::_print_all(format_args!("{}\n", format_args!($($arg)*))) };
+    ()            => { $crate::serial::_print(format_args!("\n")) };
+    ($($arg:tt)*) => { $crate::serial::_print(format_args!("{}\n", format_args!($($arg)*))) };
 }
