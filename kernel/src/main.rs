@@ -37,18 +37,20 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // フレームバッファコンソールを初期化（以降の println! が画面にも出力される）
     if let Some(fb) = boot_info.framebuffer.as_mut() {
         let info = fb.info();
-        let width = info.width.min(640);
-        let height = info.height.min(400);
-        let window = framebuffer::Window {
-            x: (info.width - width) / 2,
-            y: (info.height - height) / 2,
-            width,
-            height,
+        // Shell: 右側パネル
+        let shell_window = framebuffer::Window {
+            x: 364,
+            y: 42,
+            width: 646,
+            height: 712,
             title_bar_height: framebuffer::DEFAULT_TITLE_BAR_HEIGHT,
         };
         let buf = fb.buffer_mut();
-        framebuffer::init(buf, info, window, "Shell");
+        framebuffer::init(buf, info, shell_window, "Shell");
     }
+
+    // タスクバー描画
+    framebuffer::draw_taskbar();
 
     gdt::init();
     interrupts::init();
@@ -56,32 +58,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     mouse::init();
     x86_64::instructions::interrupts::enable();
 
-    framebuffer::init_cursor();
-
     #[cfg(test)]
     test_main();
-
-    println!("\n=== Memory Map ===");
-
-    let mut total_usable: u64 = 0;
-    for region in boot_info.memory_regions.iter() {
-        let size = region.end - region.start;
-        println!(
-            "{:#018x} {:>8} KiB {:?}",
-            region.start,
-            size / 1024,
-            region.kind,
-        );
-        if matches!(region.kind, bootloader_api::info::MemoryRegionKind::Usable) {
-            total_usable += size;
-        }
-    }
-
-    println!(
-        "Total usable: {} KiB ({} MiB)",
-        total_usable / 1024,
-        total_usable / (1024 * 1024),
-    );
 
     // Initialize page table, frame allocator, and heap
     let phys_offset = VirtAddr::new(
@@ -94,6 +72,63 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let mut frame_allocator = memory::BootFrameAllocator::new(&boot_info.memory_regions);
     allocator::init(&mut mapper, &mut frame_allocator);
 
+    // メモリ領域を収集してメモリマップパネルに表示
+    {
+        use bootloader_api::info::MemoryRegionKind as BK;
+        use framebuffer::{MemRegionInfo, MemRegionKind};
+
+        let mut regions = [MemRegionInfo {
+            start: 0,
+            end: 0,
+            kind: MemRegionKind::Usable,
+        }; 32];
+        let mut count = 0;
+
+        for region in boot_info.memory_regions.iter() {
+            if count >= 30 {
+                break; // 合成エントリ用に2枠残す
+            }
+            let kind = match region.kind {
+                BK::Usable => MemRegionKind::Usable,
+                BK::Bootloader => MemRegionKind::Bootloader,
+                BK::UnknownBios(tag) => framebuffer::bios_e820_to_kind(tag),
+                BK::UnknownUefi(_) => MemRegionKind::Reserved,
+                _ => MemRegionKind::Reserved,
+            };
+            regions[count] = MemRegionInfo {
+                start: region.start,
+                end: region.end,
+                kind,
+            };
+            count += 1;
+        }
+
+        // 合成エントリ: Heap
+        if count < 32 {
+            regions[count] = MemRegionInfo {
+                start: allocator::HEAP_START,
+                end: allocator::HEAP_START + allocator::HEAP_SIZE,
+                kind: MemRegionKind::Heap,
+            };
+            count += 1;
+        }
+
+        framebuffer::set_memory_regions(&regions[..count]);
+    }
+
+    // Memory Map パネル描画（左側）
+    let memmap_window = framebuffer::Window {
+        x: 14,
+        y: 42,
+        width: 340,
+        height: 712,
+        title_bar_height: framebuffer::DEFAULT_TITLE_BAR_HEIGHT,
+    };
+    framebuffer::draw_memory_map_panel(memmap_window);
+
+    framebuffer::init_cursor();
+
+    println!("Welcome to r-os shell. Type 'help' for available commands.\n");
     shell::run();
 }
 
