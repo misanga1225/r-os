@@ -13,6 +13,7 @@ mod gdt;
 mod interrupts;
 mod keyboard;
 mod memory;
+mod mouse;
 mod serial;
 mod shell;
 
@@ -52,7 +53,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     gdt::init();
     interrupts::init();
     interrupts::init_pics();
+    mouse::init();
     x86_64::instructions::interrupts::enable();
+
+    framebuffer::init_cursor();
 
     #[cfg(test)]
     test_main();
