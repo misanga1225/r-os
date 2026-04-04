@@ -3,8 +3,14 @@ use core::fmt;
 use font8x8::UnicodeFonts;
 use spin::Mutex;
 
+use crate::mouse::MouseEvent;
+
 pub const DEFAULT_TITLE_BAR_HEIGHT: usize = 24;
 const WINDOW_PADDING: usize = 6;
+
+// ---------------------------------------------------------------------------
+// Geometry
+// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug)]
 pub struct Rect {
@@ -45,6 +51,97 @@ impl Window {
             width,
             height,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pixel-level drawing (free functions operating on raw buffer)
+// ---------------------------------------------------------------------------
+
+fn put_pixel(buf: &mut [u8], info: FrameBufferInfo, x: usize, y: usize, r: u8, g: u8, b: u8) {
+    if x >= info.width || y >= info.height {
+        return;
+    }
+
+    let bpp = info.bytes_per_pixel;
+    let offset = (y * info.stride + x) * bpp;
+
+    if offset + bpp > buf.len() {
+        return;
+    }
+
+    match info.pixel_format {
+        PixelFormat::Rgb => {
+            buf[offset] = r;
+            buf[offset + 1] = g;
+            buf[offset + 2] = b;
+            if bpp >= 4 {
+                buf[offset + 3] = 0xFF;
+            }
+        }
+        PixelFormat::Bgr => {
+            buf[offset] = b;
+            buf[offset + 1] = g;
+            buf[offset + 2] = r;
+            if bpp >= 4 {
+                buf[offset + 3] = 0xFF;
+            }
+        }
+        PixelFormat::U8 => {
+            buf[offset] = ((r as u16 + g as u16 + b as u16) / 3) as u8;
+        }
+        PixelFormat::Unknown {
+            red_position,
+            green_position,
+            blue_position,
+        } => {
+            let mut pixel: u32 = 0;
+            pixel |= (r as u32) << red_position;
+            pixel |= (g as u32) << green_position;
+            pixel |= (b as u32) << blue_position;
+            let bytes = pixel.to_le_bytes();
+            let len = bpp.min(4);
+            buf[offset..(offset + len)].copy_from_slice(&bytes[..len]);
+        }
+        _ => {}
+    }
+}
+
+fn read_pixel(buf: &[u8], info: FrameBufferInfo, x: usize, y: usize) -> (u8, u8, u8) {
+    if x >= info.width || y >= info.height {
+        return (0, 0, 0);
+    }
+
+    let bpp = info.bytes_per_pixel;
+    let offset = (y * info.stride + x) * bpp;
+
+    if offset + bpp > buf.len() {
+        return (0, 0, 0);
+    }
+
+    match info.pixel_format {
+        PixelFormat::Rgb => (buf[offset], buf[offset + 1], buf[offset + 2]),
+        PixelFormat::Bgr => (buf[offset + 2], buf[offset + 1], buf[offset]),
+        PixelFormat::U8 => {
+            let v = buf[offset];
+            (v, v, v)
+        }
+        PixelFormat::Unknown {
+            red_position,
+            green_position,
+            blue_position,
+        } => {
+            let mut raw: u32 = 0;
+            let len = bpp.min(4);
+            for i in 0..len {
+                raw |= (buf[offset + i] as u32) << (i * 8);
+            }
+            let r = ((raw >> red_position) & 0xFF) as u8;
+            let g = ((raw >> green_position) & 0xFF) as u8;
+            let b = ((raw >> blue_position) & 0xFF) as u8;
+            (r, g, b)
+        }
+        _ => (0, 0, 0),
     }
 }
 
@@ -136,58 +233,8 @@ fn draw_background(buf: &mut [u8], info: FrameBufferInfo) {
     }
 }
 
-/// Draw a single pixel at (x, y) in RGB.
-fn put_pixel(buf: &mut [u8], info: FrameBufferInfo, x: usize, y: usize, r: u8, g: u8, b: u8) {
-    if x >= info.width || y >= info.height {
-        return;
-    }
-
-    let bpp = info.bytes_per_pixel;
-    let offset = (y * info.stride + x) * bpp;
-
-    if offset + bpp > buf.len() {
-        return;
-    }
-
-    match info.pixel_format {
-        PixelFormat::Rgb => {
-            buf[offset] = r;
-            buf[offset + 1] = g;
-            buf[offset + 2] = b;
-            if bpp >= 4 {
-                buf[offset + 3] = 0xFF;
-            }
-        }
-        PixelFormat::Bgr => {
-            buf[offset] = b;
-            buf[offset + 1] = g;
-            buf[offset + 2] = r;
-            if bpp >= 4 {
-                buf[offset + 3] = 0xFF;
-            }
-        }
-        PixelFormat::U8 => {
-            buf[offset] = ((r as u16 + g as u16 + b as u16) / 3) as u8;
-        }
-        PixelFormat::Unknown {
-            red_position,
-            green_position,
-            blue_position,
-        } => {
-            let mut pixel: u32 = 0;
-            pixel |= (r as u32) << red_position;
-            pixel |= (g as u32) << green_position;
-            pixel |= (b as u32) << blue_position;
-            let bytes = pixel.to_le_bytes();
-            let len = bpp.min(4);
-            buf[offset..(offset + len)].copy_from_slice(&bytes[..len]);
-        }
-        _ => {}
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Framebuffer Text Console
+// Font / text drawing (free functions)
 // ---------------------------------------------------------------------------
 
 const FONT_SCALE_X: usize = 1;
@@ -249,9 +296,11 @@ fn draw_text(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Console (text state only — no longer owns the buffer)
+// ---------------------------------------------------------------------------
+
 struct Console {
-    buf: &'static mut [u8],
-    info: FrameBufferInfo,
     content: Rect,
     col: usize,
     row: usize,
@@ -261,27 +310,35 @@ struct Console {
 }
 
 impl Console {
-    fn new(buf: &'static mut [u8], info: FrameBufferInfo, content: Rect) -> Self {
+    fn new(buf: &mut [u8], info: FrameBufferInfo, content: Rect) -> Self {
         let cols = content.width / FONT_WIDTH;
         let rows = content.height / FONT_HEIGHT;
-        let mut console = Console {
+        // Clear the content area
+        fill_rect(
             buf,
             info,
+            content.x,
+            content.y,
+            content.width,
+            content.height,
+            0,
+            0,
+            0,
+        );
+        Console {
             content,
             col: 0,
             row: 0,
             cols,
             rows,
             cursor_visible: false,
-        };
-        console.clear();
-        console
+        }
     }
 
-    fn clear(&mut self) {
+    fn clear(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
         fill_rect(
-            self.buf,
-            self.info,
+            buf,
+            info,
             self.content.x,
             self.content.y,
             self.content.width,
@@ -294,7 +351,7 @@ impl Console {
         self.row = 0;
     }
 
-    fn write_char(&mut self, c: char) {
+    fn write_char(&mut self, buf: &mut [u8], info: FrameBufferInfo, c: char) {
         if self.rows == 0 || self.cols == 0 {
             return;
         }
@@ -303,17 +360,16 @@ impl Console {
                 self.col = 0;
                 self.row += 1;
                 if self.row >= self.rows {
-                    self.scroll_up();
+                    self.scroll_up(buf, info);
                 }
             }
             '\r' => {
                 self.col = 0;
             }
             '\u{8}' => {
-                // Backspace: move one column left and clear it.
                 if self.col > 0 {
                     self.col -= 1;
-                    self.clear_char(self.col, self.row);
+                    self.clear_char(buf, info, self.col, self.row);
                 }
             }
             c => {
@@ -321,63 +377,62 @@ impl Console {
                     self.col = 0;
                     self.row += 1;
                     if self.row >= self.rows {
-                        self.scroll_up();
+                        self.scroll_up(buf, info);
                     }
                 }
-                self.draw_char(c, self.col, self.row);
+                self.draw_char(buf, info, c, self.col, self.row);
                 self.col += 1;
             }
         }
     }
 
-    fn draw_char(&mut self, c: char, col: usize, row: usize) {
+    fn draw_char(&self, buf: &mut [u8], info: FrameBufferInfo, c: char, col: usize, row: usize) {
         let x0 = self.content.x + col * FONT_WIDTH;
         let y0 = self.content.y + row * FONT_HEIGHT;
-        draw_char_at(self.buf, self.info, x0, y0, c, 0xFF, 0xFF, 0xFF);
+        draw_char_at(buf, info, x0, y0, c, 0xFF, 0xFF, 0xFF);
     }
 
-    fn clear_char(&mut self, col: usize, row: usize) {
+    fn clear_char(&self, buf: &mut [u8], info: FrameBufferInfo, col: usize, row: usize) {
         let x0 = self.content.x + col * FONT_WIDTH;
         let y0 = self.content.y + row * FONT_HEIGHT;
         for dy in 0..FONT_HEIGHT {
             for dx in 0..FONT_WIDTH {
-                put_pixel(self.buf, self.info, x0 + dx, y0 + dy, 0, 0, 0);
+                put_pixel(buf, info, x0 + dx, y0 + dy, 0, 0, 0);
             }
         }
     }
 
-    fn draw_cursor(&mut self) {
+    fn draw_cursor(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
         if !self.cursor_visible {
             let x = self.content.x + self.col * FONT_WIDTH;
             let y0 = self.content.y + self.row * FONT_HEIGHT;
             for dy in 0..FONT_HEIGHT {
-                put_pixel(self.buf, self.info, x, y0 + dy, 0xFF, 0xFF, 0xFF);
+                put_pixel(buf, info, x, y0 + dy, 0xFF, 0xFF, 0xFF);
             }
             self.cursor_visible = true;
         }
     }
 
-    fn erase_cursor(&mut self) {
+    fn erase_cursor(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
         if self.cursor_visible {
             let x = self.content.x + self.col * FONT_WIDTH;
             let y0 = self.content.y + self.row * FONT_HEIGHT;
             for dy in 0..FONT_HEIGHT {
-                put_pixel(self.buf, self.info, x, y0 + dy, 0, 0, 0);
+                put_pixel(buf, info, x, y0 + dy, 0, 0, 0);
             }
             self.cursor_visible = false;
         }
     }
 
-    fn scroll_up(&mut self) {
+    fn scroll_up(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
         if self.rows == 0 {
             return;
         }
 
-        let bpp = self.info.bytes_per_pixel;
+        let bpp = info.bytes_per_pixel;
         let row_bytes = self.content.width * bpp;
         let content_y_end = self.content.y + self.content.height;
 
-        // Copy content up by one text row.
         let max_copy_rows = self.content.height.saturating_sub(FONT_HEIGHT);
         for wy in 0..max_copy_rows {
             let src_y = self.content.y + wy + FONT_HEIGHT;
@@ -385,19 +440,17 @@ impl Console {
             if src_y + 1 > content_y_end {
                 break;
             }
-            let src_start = (src_y * self.info.stride + self.content.x) * bpp;
-            let dst_start = (dst_y * self.info.stride + self.content.x) * bpp;
-            if src_start + row_bytes <= self.buf.len() && dst_start + row_bytes <= self.buf.len() {
-                self.buf
-                    .copy_within(src_start..(src_start + row_bytes), dst_start);
+            let src_start = (src_y * info.stride + self.content.x) * bpp;
+            let dst_start = (dst_y * info.stride + self.content.x) * bpp;
+            if src_start + row_bytes <= buf.len() && dst_start + row_bytes <= buf.len() {
+                buf.copy_within(src_start..(src_start + row_bytes), dst_start);
             }
         }
 
-        // Clear the last text row inside the content area.
         let clear_y_start = content_y_end.saturating_sub(FONT_HEIGHT);
         fill_rect(
-            self.buf,
-            self.info,
+            buf,
+            info,
             self.content.x,
             clear_y_start,
             self.content.width,
@@ -409,22 +462,153 @@ impl Console {
 
         self.row = self.rows - 1;
     }
-}
 
-impl fmt::Write for Console {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
+    fn write_str(&mut self, buf: &mut [u8], info: FrameBufferInfo, s: &str) {
         for c in s.chars() {
-            self.write_char(c);
+            self.write_char(buf, info, c);
         }
-        Ok(())
     }
 }
 
 // ---------------------------------------------------------------------------
-// Global Console
+// Mouse cursor
 // ---------------------------------------------------------------------------
 
-static CONSOLE: Mutex<Option<Console>> = Mutex::new(None);
+const CURSOR_W: usize = 12;
+const CURSOR_H: usize = 16;
+
+// 0 = transparent, 1 = black (outline), 2 = white (fill)
+#[rustfmt::skip]
+const CURSOR_SPRITE: [[u8; CURSOR_W]; CURSOR_H] = [
+    [1,0,0,0,0,0,0,0,0,0,0,0],
+    [1,1,0,0,0,0,0,0,0,0,0,0],
+    [1,2,1,0,0,0,0,0,0,0,0,0],
+    [1,2,2,1,0,0,0,0,0,0,0,0],
+    [1,2,2,2,1,0,0,0,0,0,0,0],
+    [1,2,2,2,2,1,0,0,0,0,0,0],
+    [1,2,2,2,2,2,1,0,0,0,0,0],
+    [1,2,2,2,2,2,2,1,0,0,0,0],
+    [1,2,2,2,2,2,2,2,1,0,0,0],
+    [1,2,2,2,2,2,2,2,2,1,0,0],
+    [1,2,2,2,2,2,1,1,1,1,1,0],
+    [1,2,2,1,2,2,1,0,0,0,0,0],
+    [1,2,1,0,1,2,2,1,0,0,0,0],
+    [1,1,0,0,1,2,2,1,0,0,0,0],
+    [1,0,0,0,0,1,2,2,1,0,0,0],
+    [0,0,0,0,0,1,1,1,0,0,0,0],
+];
+
+struct CursorState {
+    x: i32,
+    y: i32,
+    screen_width: i32,
+    screen_height: i32,
+    visible: bool,
+    saved_bg: [[u8; 3]; CURSOR_W * CURSOR_H],
+}
+
+impl CursorState {
+    fn new(screen_width: usize, screen_height: usize) -> Self {
+        CursorState {
+            x: (screen_width / 2) as i32,
+            y: (screen_height / 2) as i32,
+            screen_width: screen_width as i32,
+            screen_height: screen_height as i32,
+            visible: false,
+            saved_bg: [[0; 3]; CURSOR_W * CURSOR_H],
+        }
+    }
+
+    fn save_background(&mut self, buf: &[u8], info: FrameBufferInfo) {
+        let cx = self.x as usize;
+        let cy = self.y as usize;
+        for sy in 0..CURSOR_H {
+            for sx in 0..CURSOR_W {
+                let (r, g, b) = read_pixel(buf, info, cx + sx, cy + sy);
+                self.saved_bg[sy * CURSOR_W + sx] = [r, g, b];
+            }
+        }
+    }
+
+    fn restore_background(&self, buf: &mut [u8], info: FrameBufferInfo) {
+        if !self.visible {
+            return;
+        }
+        let cx = self.x as usize;
+        let cy = self.y as usize;
+        for sy in 0..CURSOR_H {
+            for sx in 0..CURSOR_W {
+                if CURSOR_SPRITE[sy][sx] != 0 {
+                    let [r, g, b] = self.saved_bg[sy * CURSOR_W + sx];
+                    put_pixel(buf, info, cx + sx, cy + sy, r, g, b);
+                }
+            }
+        }
+    }
+
+    fn draw(&self, buf: &mut [u8], info: FrameBufferInfo) {
+        let cx = self.x as usize;
+        let cy = self.y as usize;
+        for sy in 0..CURSOR_H {
+            for sx in 0..CURSOR_W {
+                match CURSOR_SPRITE[sy][sx] {
+                    1 => put_pixel(buf, info, cx + sx, cy + sy, 0x00, 0x00, 0x00),
+                    2 => put_pixel(buf, info, cx + sx, cy + sy, 0xFF, 0xFF, 0xFF),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn update(&mut self, buf: &mut [u8], info: FrameBufferInfo, event: MouseEvent) {
+        // 旧位置の背景を復元
+        self.restore_background(buf, info);
+
+        // 座標更新（PS/2のY軸は上が正なので反転）
+        self.x += event.dx as i32;
+        self.y -= event.dy as i32;
+        self.x = self.x.clamp(0, self.screen_width - 1);
+        self.y = self.y.clamp(0, self.screen_height - 1);
+
+        // 新位置の背景を保存して描画
+        self.save_background(buf, info);
+        self.draw(buf, info);
+        self.visible = true;
+    }
+
+    fn show(&mut self, buf: &mut [u8], info: FrameBufferInfo) {
+        self.save_background(buf, info);
+        self.draw(buf, info);
+        self.visible = true;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Global framebuffer state
+// ---------------------------------------------------------------------------
+
+struct FrameBufferState {
+    buf: &'static mut [u8],
+    info: FrameBufferInfo,
+    console: Console,
+    cursor: Option<CursorState>,
+}
+
+/// fmt::Write adapter that borrows from FrameBufferState.
+struct ConsoleWriter<'a> {
+    state: &'a mut FrameBufferState,
+}
+
+impl<'a> fmt::Write for ConsoleWriter<'a> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let buf = &mut *self.state.buf;
+        let info = self.state.info;
+        self.state.console.write_str(buf, info, s);
+        Ok(())
+    }
+}
+
+static FB_STATE: Mutex<Option<FrameBufferState>> = Mutex::new(None);
 
 pub fn init(buf: &'static mut [u8], info: FrameBufferInfo, window: Window, title: &str) {
     draw_background(buf, info);
@@ -475,39 +659,69 @@ pub fn init(buf: &'static mut [u8], info: FrameBufferInfo, window: Window, title
     }
 
     let content = window.content_rect();
-    *CONSOLE.lock() = Some(Console::new(buf, info, content));
+    let console = Console::new(buf, info, content);
+
+    *FB_STATE.lock() = Some(FrameBufferState {
+        buf,
+        info,
+        console,
+        cursor: None,
+    });
+}
+
+pub fn init_cursor() {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if let Some(state) = FB_STATE.lock().as_mut() {
+            let w = state.info.width;
+            let h = state.info.height;
+            let mut cursor = CursorState::new(w, h);
+            cursor.show(state.buf, state.info);
+            state.cursor = Some(cursor);
+        }
+    });
+}
+
+pub fn update_cursor(event: MouseEvent) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if let Some(state) = FB_STATE.lock().as_mut() {
+            if let Some(cursor) = state.cursor.as_mut() {
+                cursor.update(state.buf, state.info, event);
+            }
+        }
+    });
 }
 
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
-    use fmt::Write;
     x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(console) = CONSOLE.lock().as_mut() {
-            console.write_fmt(args).unwrap();
+        if let Some(state) = FB_STATE.lock().as_mut() {
+            use fmt::Write;
+            let mut writer = ConsoleWriter { state };
+            writer.write_fmt(args).unwrap();
         }
     });
 }
 
 pub fn show_cursor() {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(console) = CONSOLE.lock().as_mut() {
-            console.draw_cursor();
+        if let Some(state) = FB_STATE.lock().as_mut() {
+            state.console.draw_cursor(state.buf, state.info);
         }
     });
 }
 
 pub fn hide_cursor() {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(console) = CONSOLE.lock().as_mut() {
-            console.erase_cursor();
+        if let Some(state) = FB_STATE.lock().as_mut() {
+            state.console.erase_cursor(state.buf, state.info);
         }
     });
 }
 
 pub fn clear() {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(console) = CONSOLE.lock().as_mut() {
-            console.clear();
+        if let Some(state) = FB_STATE.lock().as_mut() {
+            state.console.clear(state.buf, state.info);
         }
     });
 }

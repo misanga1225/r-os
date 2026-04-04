@@ -1,4 +1,4 @@
-use crate::keyboard;
+use crate::{keyboard, mouse};
 use crate::{print, println};
 use pc_keyboard::DecodedKey;
 
@@ -17,7 +17,10 @@ pub fn run() -> ! {
     crate::framebuffer::show_cursor();
 
     loop {
+        let mut had_input = false;
+
         if let Some(key) = keyboard::try_read_key() {
+            had_input = true;
             crate::framebuffer::hide_cursor();
             match key {
                 DecodedKey::Unicode(c) => {
@@ -28,8 +31,14 @@ pub fn run() -> ! {
                 }
             }
             crate::framebuffer::show_cursor();
-        } else {
-            // 入力がなければ次の割り込みまで CPU を休止して省電力
+        }
+
+        while let Some(event) = mouse::try_read_event() {
+            had_input = true;
+            crate::framebuffer::update_cursor(event);
+        }
+
+        if !had_input {
             x86_64::instructions::hlt();
         }
     }

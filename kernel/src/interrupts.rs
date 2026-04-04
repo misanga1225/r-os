@@ -20,6 +20,7 @@ static PICS: spin::Mutex<ChainedPics> =
 pub enum HardwareInterrupt {
     Timer = PIC1_OFFSET,
     Keyboard = PIC1_OFFSET + 1,
+    Mouse = PIC2_OFFSET + 4, // IRQ12
 }
 
 static IDT: spin::Lazy<InterruptDescriptorTable> = spin::Lazy::new(|| {
@@ -40,6 +41,7 @@ static IDT: spin::Lazy<InterruptDescriptorTable> = spin::Lazy::new(|| {
     // Hardware interrupts
     idt[HardwareInterrupt::Timer as u8].set_handler_fn(timer_handler);
     idt[HardwareInterrupt::Keyboard as u8].set_handler_fn(keyboard_handler);
+    idt[HardwareInterrupt::Mouse as u8].set_handler_fn(mouse_handler);
 
     idt
 });
@@ -126,5 +128,14 @@ extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(HardwareInterrupt::Keyboard as u8);
+    }
+}
+
+extern "x86-interrupt" fn mouse_handler(_stack_frame: InterruptStackFrame) {
+    let byte: u8 = unsafe { Port::new(0x60).read() };
+    crate::mouse::add_byte(byte);
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(HardwareInterrupt::Mouse as u8);
     }
 }
